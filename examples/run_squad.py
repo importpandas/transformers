@@ -66,6 +66,7 @@ try:
 except ImportError:
     from tensorboardX import SummaryWriter
 
+from examples.utils_distributed_training import get_oneNode_addr, dist_init, stats, xprint
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +259,11 @@ def train(args, train_dataset, model, tokenizer):
                         results = evaluate(args, model, tokenizer)
                         for key, value in results.items():
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
+                            xprint(f'step{global_step} eval_{key}: {value}')
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
                     tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
+                    xprint(f'step{global_step} lr: { scheduler.get_lr()[0]}')
+                    xprint(f'step{global_step} loss: {(tr_loss - logging_loss)/args.logging_steps}\n\n')
                     logging_loss = tr_loss
 
                 # Save model checkpoint
@@ -720,11 +724,26 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
         args.n_gpu = 1
+        host_addr = get_oneNode_addr()
+        local_id = int(os.environ['SLURM_LOCALID'])
+        rank = int(os.environ['SLURM_PROCID'])
+        args.local_rank = rank
+        args.device_id = local_id
+        world_size = int(os.environ['SLURM_NTASKS'])
+        args.world_size = world_size
+        dist_init(host_addr, rank, local_id, world_size, '2' + os.environ['SLURM_JOBID'][-4:])
+        device = torch.device("cuda", local_id)
+        xprint(f'host_addr {host_addr}')
+        xprint(f'local id {local_id}')
+        xprint(f'rank {rank}')
+        xprint(f'world size {world_size}')
     args.device = device
+
+    xprint('arguments:')
+    for arg in vars(args):
+        xprint(f'{arg}: {getattr(args, arg)}')
+    xprint('\n\n')
 
     # Setup logging
     logging.basicConfig(
