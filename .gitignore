@@ -139,3 +139,10 @@ serialization_dir
 # emacs
 *.*~
 debug.env
+
+log/
+output/
+cached*
+pretrained/
+submit_single.sh
+shell/
