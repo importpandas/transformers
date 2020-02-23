@@ -200,11 +200,15 @@ def find_best_thresh(preds, scores, na_probs, qid_to_has_ans):
 
 def find_all_best_thresh(main_eval, preds, exact_raw, f1_raw, na_probs, qid_to_has_ans):
     best_exact, exact_thresh = find_best_thresh(preds, exact_raw, na_probs, qid_to_has_ans)
+    f1_with_em_thresh = apply_no_ans_threshold(f1_raw, na_probs, qid_to_has_ans, exact_thresh)
     best_f1, f1_thresh = find_best_thresh(preds, f1_raw, na_probs, qid_to_has_ans)
+    em_with_f1_thresh = apply_no_ans_threshold(exact_raw, na_probs, qid_to_has_ans, f1_thresh)
 
     main_eval["best_exact"] = best_exact
+    main_eval["f1_with_em_thresh"] = f1_with_em_thresh
     main_eval["best_exact_thresh"] = exact_thresh
     main_eval["best_f1"] = best_f1
+    main_eval["em_with_f1_thresh"] = em_with_f1_thresh
     main_eval["best_f1_thresh"] = f1_thresh
 
 
@@ -754,4 +758,4 @@ def compute_predictions_log_probs(
         with open(output_null_log_odds_file, "w") as writer:
             writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
 
-    return all_predictions
+    return all_predictions, scores_diff_json

@@ -220,7 +220,7 @@ def train(args, train_dataset, model, tokenizer):
             if args.model_type in ["xlm", "roberta", "distilbert"]:
                 del inputs["token_type_ids"]
 
-            if args.model_type in ["xlnet", "xlm"]:
+            if args.model_type in ["xlnet", "xlm", "albert"]:
                 inputs.update({"cls_index": batch[5], "p_mask": batch[6]})
                 if args.version_2_with_negative:
                     inputs.update({"is_impossible": batch[7]})
@@ -340,8 +340,8 @@ def evaluate(args, model, tokenizer, prefix=""):
 
             example_indices = batch[3]
 
-            # XLNet and XLM use more arguments for their predictions
-            if args.model_type in ["xlnet", "xlm"]:
+            # XLNet, XLM and ALBERT use more arguments for their predictions
+            if args.model_type in ["xlnet", "xlm", "albert"]:
                 inputs.update({"cls_index": batch[4], "p_mask": batch[5]})
                 # for lang_id-sensitive xlm models
                 if hasattr(model, "config") and hasattr(model.config, "lang2id"):
@@ -394,11 +394,11 @@ def evaluate(args, model, tokenizer, prefix=""):
         output_null_log_odds_file = None
 
     # XLNet and XLM use a more complex post-processing procedure
-    if args.model_type in ["xlnet", "xlm"]:
+    if args.model_type in ["xlnet", "xlm", "albert"]:
         start_n_top = model.config.start_n_top if hasattr(model, "config") else model.module.config.start_n_top
         end_n_top = model.config.end_n_top if hasattr(model, "config") else model.module.config.end_n_top
 
-        predictions = compute_predictions_log_probs(
+        predictions,no_answer_probs = compute_predictions_log_probs(
             examples,
             features,
             all_results,
@@ -413,6 +413,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             tokenizer,
             args.verbose_logging,
         )
+        results = squad_evaluate(examples, predictions, no_answer_probs=no_answer_probs)
     else:
         predictions = compute_predictions_logits(
             examples,
@@ -429,9 +430,9 @@ def evaluate(args, model, tokenizer, prefix=""):
             args.null_score_diff_threshold,
             tokenizer,
         )
+        results = squad_evaluate(examples, predictions)
 
     # Compute the F1 and exact scores.
-    results = squad_evaluate(examples, predictions)
     return results
 
 
@@ -693,6 +694,10 @@ def main():
     parser.add_argument("--server_port", type=str, default="", help="Can be used for distant debugging.")
 
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
+
+    parser.add_argument("--start_n_top", type=int, default=5, help="beam size for the start positions.")
+
+    parser.add_argument("--end_n_top", type=int, default=5, help="beam size for the end positions.")
     args = parser.parse_args()
 
     if args.doc_stride >= args.max_seq_length - args.max_query_length:

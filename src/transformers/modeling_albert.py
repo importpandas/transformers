@@ -21,11 +21,13 @@ import os
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import functional as F
 
 from transformers.configuration_albert import AlbertConfig
 from transformers.modeling_bert import ACT2FN, BertEmbeddings, BertSelfAttention, prune_linear_layer
 from transformers.modeling_utils import PreTrainedModel
 
+from .modeling_utils import PoolerAnswerClass, PoolerEndLogits, PoolerStartLogits, SequenceSummary
 from .file_utils import add_start_docstrings, add_start_docstrings_to_callable
 
 
@@ -796,10 +798,13 @@ class AlbertForSequenceClassification(AlbertPreTrainedModel):
 class AlbertForQuestionAnswering(AlbertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
-        self.num_labels = config.num_labels
+        self.start_n_top = config.start_n_top
+        self.end_n_top = config.end_n_top
 
         self.albert = AlbertModel(config)
-        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+        self.start_logits = PoolerStartLogits(config)
+        self.end_logits = PoolerEndLogits(config)
+        self.answer_class = PoolerAnswerClass(config)
 
         self.init_weights()
 
@@ -814,6 +819,9 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         inputs_embeds=None,
         start_positions=None,
         end_positions=None,
+        is_impossible=None,
+        cls_index=None,
+        p_mask=None,
     ):
         r"""
         start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`, defaults to :obj:`None`):
@@ -870,29 +878,71 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
             inputs_embeds=inputs_embeds,
         )
 
-        sequence_output = outputs[0]
+        hidden_states = outputs[0]
 
-        logits = self.qa_outputs(sequence_output)
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1)
-        end_logits = end_logits.squeeze(-1)
+        start_logits = self.start_logits(hidden_states, p_mask=p_mask)
+        outputs = outputs[1:]  # Keep mems, hidden states, attentions if there are in it
 
-        outputs = (start_logits, end_logits,) + outputs[2:]
+
         if start_positions is not None and end_positions is not None:
-            # If we are on multi-GPU, split add a dimension
-            if len(start_positions.size()) > 1:
-                start_positions = start_positions.squeeze(-1)
-            if len(end_positions.size()) > 1:
-                end_positions = end_positions.squeeze(-1)
-            # sometimes the start/end positions are outside our model inputs, we ignore these terms
-            ignored_index = start_logits.size(1)
-            start_positions.clamp_(0, ignored_index)
-            end_positions.clamp_(0, ignored_index)
+            # If we are on multi-GPU, let's remove the dimension added by batch splitting
+            for x in (start_positions, end_positions, cls_index, is_impossible):
+                if x is not None and x.dim() > 1:
+                    x.squeeze_(-1)
 
-            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            # during training, compute the end logits based on the ground truth of the start position
+            end_logits = self.end_logits(hidden_states, start_positions=start_positions, p_mask=p_mask)
+
+            loss_fct = CrossEntropyLoss()
             start_loss = loss_fct(start_logits, start_positions)
             end_loss = loss_fct(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
+
+            if cls_index is not None and is_impossible is not None:
+                # Predict answerability from the representation of CLS and START
+                cls_logits = self.answer_class(hidden_states, start_positions=start_positions, cls_index=cls_index)
+                loss_fct_cls = nn.BCEWithLogitsLoss()
+                cls_loss = loss_fct_cls(cls_logits, is_impossible)
+
+                # note(zhiliny): by default multiply the loss by 0.5 so that the scale is comparable to start_loss and end_loss
+                total_loss += cls_loss * 0.5
+
             outputs = (total_loss,) + outputs
 
-        return outputs  # (loss), start_logits, end_logits, (hidden_states), (attentions)
+        else:
+            # during inference, compute the end logits based on beam search
+            bsz, slen, hsz = hidden_states.size()
+            start_log_probs = F.softmax(start_logits, dim=-1)  # shape (bsz, slen)
+
+            start_top_log_probs, start_top_index = torch.topk(
+                start_log_probs, self.start_n_top, dim=-1
+            )  # shape (bsz, start_n_top)
+            start_top_index_exp = start_top_index.unsqueeze(-1).expand(-1, -1, hsz)  # shape (bsz, start_n_top, hsz)
+            start_states = torch.gather(hidden_states, -2, start_top_index_exp)  # shape (bsz, start_n_top, hsz)
+            start_states = start_states.unsqueeze(1).expand(-1, slen, -1, -1)  # shape (bsz, slen, start_n_top, hsz)
+
+            hidden_states_expanded = hidden_states.unsqueeze(2).expand_as(
+                start_states
+            )  # shape (bsz, slen, start_n_top, hsz)
+            p_mask = p_mask.unsqueeze(-1) if p_mask is not None else None
+            end_logits = self.end_logits(hidden_states_expanded, start_states=start_states, p_mask=p_mask)
+            end_log_probs = F.softmax(end_logits, dim=1)  # shape (bsz, slen, start_n_top)
+
+            end_top_log_probs, end_top_index = torch.topk(
+                end_log_probs, self.end_n_top, dim=1
+            )  # shape (bsz, end_n_top, start_n_top)
+            end_top_log_probs = end_top_log_probs.view(-1, self.start_n_top * self.end_n_top)
+            end_top_index = end_top_index.view(-1, self.start_n_top * self.end_n_top)
+
+            start_states = torch.einsum(
+                "blh,bl->bh", hidden_states, start_log_probs
+            )  # get the representation of START as weighted sum of hidden states
+            cls_logits = self.answer_class(
+                hidden_states, start_states=start_states, cls_index=cls_index
+            )  # Shape (batch size,): one single `cls_logits` for each sample
+
+            outputs = (start_top_log_probs, start_top_index, end_top_log_probs, end_top_index, cls_logits) + outputs
+
+        # return start_top_log_probs, start_top_index, end_top_log_probs, end_top_index, cls_logits
+        # or (if labels are provided) (total_loss,)
+        return outputs
