@@ -907,7 +907,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
                 # note(zhiliny): by default multiply the loss by 0.5 so that the scale is comparable to start_loss and end_loss
                 total_loss += cls_loss * 0.5
 
-            outputs = (total_loss,) + outputs
+            outputs = (total_loss,)
 
         else:
             # during inference, compute the end logits based on beam search

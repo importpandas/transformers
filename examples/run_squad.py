@@ -30,6 +30,8 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
+import sys
+sys.path.insert(0,'/mnt/lustre/sjtu/home/hsx66/workspace/squad2.0/transformers/src')
 from transformers import (
     WEIGHTS_NAME,
     AdamW,
@@ -70,7 +72,7 @@ except ImportError:
 from utils_distributed_training import get_oneNode_addr, dist_init, stats, modified_print
 
 #print with flush=True and only print with args.local_rank=-1 or 0
-xprint = functools.partial(modified_print,local_rank=int(os.environ['SLURM_PROCID'])) 
+xprint = functools.partial(modified_print, local_rank=int(os.environ['SLURM_PROCID'])) 
 
 logger = logging.getLogger(__name__)
 
@@ -734,6 +736,7 @@ def main():
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         args.n_gpu = 1
+        job_id = int(os.environ['SLURM_JOBID'])
         host_addr = get_oneNode_addr()
         local_id = int(os.environ['SLURM_LOCALID'])
         rank = int(os.environ['SLURM_PROCID'])
@@ -743,6 +746,7 @@ def main():
         args.world_size = world_size
         dist_init(host_addr, rank, local_id, world_size, '2' + os.environ['SLURM_JOBID'][-4:])
         device = torch.device("cuda", local_id)
+        xprint(f'slurm job id {job_id}')
         xprint(f'host_addr {host_addr}')
         xprint(f'local id {local_id}')
         xprint(f'rank {rank}')
@@ -794,6 +798,7 @@ def main():
         config=config,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
+    xprint(f"model start_n_top {model.start_n_top}")
 
     if args.local_rank == 0:
         # Make sure only the first process in distributed training will download model & vocab
