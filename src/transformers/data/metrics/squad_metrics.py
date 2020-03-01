@@ -644,9 +644,13 @@ def compute_predictions_log_probs(
                     # We could hypothetically create invalid predictions, e.g., predict
                     # that the start of the span is in the question. We throw out all
                     # invalid predictions.
-                    if start_index >= feature.paragraph_len - 1:
+                    if start_index >= len(feature.tokens):
                         continue
-                    if end_index >= feature.paragraph_len - 1:
+                    if end_index >= len(feature.tokens):
+                        continue
+                    if start_index not in feature.token_to_orig_map:
+                        continue
+                    if end_index not in feature.token_to_orig_map:
                         continue
 
                     if not feature.token_is_max_context.get(start_index, False):
@@ -719,14 +723,15 @@ def compute_predictions_log_probs(
         # In very rare edge cases we could have no valid predictions. So we
         # just create a nonce prediction in this case to avoid failure.
         if not nbest:
-            nbest.append(_NbestPrediction(text="", start_log_prob=-1e6, end_log_prob=-1e6))
+            nbest.append(_NbestPrediction(text="empty", start_log_prob=-1e6, end_log_prob=-1e6))
 
         total_scores = []
         best_non_null_entry = None
         for entry in nbest:
             total_scores.append(entry.start_log_prob + entry.end_log_prob)
             if not best_non_null_entry:
-                best_non_null_entry = entry
+                if entry.text:
+                    best_non_null_entry = entry
 
         probs = _compute_softmax(total_scores)
 
