@@ -1164,10 +1164,10 @@ class PoolerEndLogits(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.dense_0 = nn.Linear(config.hidden_size * 2, config.hidden_size)
+        self.dense_0 = nn.Linear(config.hidden_size * 2, config.hidden_size // 4)
         self.activation = nn.Tanh()
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dense_1 = nn.Linear(config.hidden_size, 1)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size // 4, eps=config.layer_norm_eps)
+        self.dense_1 = nn.Linear(config.hidden_size // 4, 1)
 
     def forward(self, hidden_states, start_states=None, start_positions=None, p_mask=None):
         """ Args:
@@ -1210,9 +1210,10 @@ class PoolerAnswerClass(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.dense_0 = nn.Linear(config.hidden_size * 2, config.hidden_size)
+        self.dense_0 = nn.Linear(config.hidden_size * 2, config.hidden_size // 4)
         self.activation = nn.Tanh()
-        self.dense_1 = nn.Linear(config.hidden_size, 1, bias=False)
+        self.dense_1 = nn.Linear(config.hidden_size // 4, 1, bias=False)
+        self.dropout = nn.Dropout(p=0.1)
 
     def forward(self, hidden_states, start_states=None, start_positions=None, cls_index=None):
         """
@@ -1247,6 +1248,7 @@ class PoolerAnswerClass(nn.Module):
 
         x = self.dense_0(torch.cat([start_states, cls_token_state], dim=-1))
         x = self.activation(x)
+        x = self.dropout(x)
         x = self.dense_1(x).squeeze(-1)
 
         return x

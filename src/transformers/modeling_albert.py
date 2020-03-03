@@ -912,7 +912,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         else:
             # during inference, compute the end logits based on beam search
             bsz, slen, hsz = hidden_states.size()
-            start_log_probs = F.softmax(start_logits, dim=-1)  # shape (bsz, slen)
+            start_log_probs = F.log_softmax(start_logits, dim=-1)  # shape (bsz, slen)
 
             start_top_log_probs, start_top_index = torch.topk(
                 start_log_probs, self.start_n_top, dim=-1
@@ -926,7 +926,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
             )  # shape (bsz, slen, start_n_top, hsz)
             p_mask = p_mask.unsqueeze(-1) if p_mask is not None else None
             end_logits = self.end_logits(hidden_states_expanded, start_states=start_states, p_mask=p_mask)
-            end_log_probs = F.softmax(end_logits, dim=1)  # shape (bsz, slen, start_n_top)
+            end_log_probs = F.log_softmax(end_logits, dim=1)  # shape (bsz, slen, start_n_top)
 
             end_top_log_probs, end_top_index = torch.topk(
                 end_log_probs, self.end_n_top, dim=1
@@ -934,8 +934,9 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
             end_top_log_probs = end_top_log_probs.view(-1, self.start_n_top * self.end_n_top)
             end_top_index = end_top_index.view(-1, self.start_n_top * self.end_n_top)
 
+            start_p =  F.softmax(start_logits, dim=-1)
             start_states = torch.einsum(
-                "blh,bl->bh", hidden_states, start_log_probs
+                "blh,bl->bh", hidden_states, start_p
             )  # get the representation of START as weighted sum of hidden states
             cls_logits = self.answer_class(
                 hidden_states, start_states=start_states, cls_index=cls_index
