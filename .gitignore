@@ -140,9 +140,9 @@ serialization_dir
 *.*~
 debug.env
 
-log/
-output/
+log*/
+output*/
 cached*
 pretrained/
 submit_single.sh
-shell/
+shell*/

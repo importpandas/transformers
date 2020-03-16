@@ -200,11 +200,17 @@ def find_best_thresh(preds, scores, na_probs, qid_to_has_ans):
 
 def find_all_best_thresh(main_eval, preds, exact_raw, f1_raw, na_probs, qid_to_has_ans):
     best_exact, exact_thresh = find_best_thresh(preds, exact_raw, na_probs, qid_to_has_ans)
+    f1_with_em_thresh = apply_no_ans_threshold(f1_raw, na_probs, qid_to_has_ans, exact_thresh)
+    f1_value_with_em_thresh = sum(list(f1_with_em_thresh.values())) / len(f1_with_em_thresh) * 100
     best_f1, f1_thresh = find_best_thresh(preds, f1_raw, na_probs, qid_to_has_ans)
+    em_with_f1_thresh = apply_no_ans_threshold(exact_raw, na_probs, qid_to_has_ans, f1_thresh)
+    em_value_with_f1_thresh = sum(list(em_with_f1_thresh.values())) / len(em_with_f1_thresh) * 100
 
     main_eval["best_exact"] = best_exact
+    main_eval["f1_with_em_thresh"] = f1_value_with_em_thresh
     main_eval["best_exact_thresh"] = exact_thresh
     main_eval["best_f1"] = best_f1
+    main_eval["em_with_f1_thresh"] = em_value_with_f1_thresh
     main_eval["best_f1_thresh"] = f1_thresh
 
 
@@ -548,10 +554,7 @@ def compute_predictions_logits(
             # predict "" iff the null score - the score of best non-null > threshold
             score_diff = score_null - best_non_null_entry.start_logit - (best_non_null_entry.end_logit)
             scores_diff_json[example.qas_id] = score_diff
-            if score_diff > null_score_diff_threshold:
-                all_predictions[example.qas_id] = ""
-            else:
-                all_predictions[example.qas_id] = best_non_null_entry.text
+            all_predictions[example.qas_id] = best_non_null_entry.text
         all_nbest_json[example.qas_id] = nbest_json
 
     with open(output_prediction_file, "w") as writer:
@@ -564,7 +567,7 @@ def compute_predictions_logits(
         with open(output_null_log_odds_file, "w") as writer:
             writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
 
-    return all_predictions
+    return all_predictions, scores_diff_json
 
 
 def compute_predictions_log_probs(
@@ -638,11 +641,14 @@ def compute_predictions_log_probs(
                     # We could hypothetically create invalid predictions, e.g., predict
                     # that the start of the span is in the question. We throw out all
                     # invalid predictions.
-                    if start_index >= feature.paragraph_len - 1:
+                    if start_index >= len(feature.tokens):
                         continue
-                    if end_index >= feature.paragraph_len - 1:
+                    if end_index >= len(feature.tokens):
                         continue
-
+                    if start_index not in feature.token_to_orig_map:
+                        continue
+                    if end_index not in feature.token_to_orig_map:
+                        continue
                     if not feature.token_is_max_context.get(start_index, False):
                         continue
                     if end_index < start_index:
@@ -754,4 +760,4 @@ def compute_predictions_log_probs(
         with open(output_null_log_odds_file, "w") as writer:
             writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
 
-    return all_predictions
+    return all_predictions, scores_diff_json

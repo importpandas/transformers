@@ -16,8 +16,13 @@ def get_oneNode_addr():
 
 def dist_init(host_addr, rank, local_rank, world_size, port=23456):
     host_addr_full = 'tcp://' + host_addr + ':' + str(port)
-    torch.distributed.init_process_group("nccl", init_method=host_addr_full,
-                                          rank=rank, world_size=world_size)
+    try:
+        torch.distributed.init_process_group("nccl", init_method=host_addr_full,
+                                              rank=rank, world_size=world_size)
+    except:
+        xprint(f"host addr {host_addr_full}")
+        print(f"process id {int(os.environ['SLURM_PROCID'])}")
+        exit("distributed training initialization failed")
     num_gpus = torch.cuda.device_count()
     torch.cuda.set_device(local_rank)
     assert torch.distributed.is_initialized()

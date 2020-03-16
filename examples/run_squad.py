@@ -30,6 +30,8 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
+import sys
+sys.path.insert(0,'/mnt/lustre/sjtu/home/hsx66/workspace/squad2.0/transformers_for_test/src')
 from transformers import (
     WEIGHTS_NAME,
     AdamW,
@@ -70,7 +72,7 @@ except ImportError:
 from utils_distributed_training import get_oneNode_addr, dist_init, stats, modified_print
 
 #print with flush=True and only print with args.local_rank=-1 or 0
-xprint = functools.partial(modified_print,local_rank=int(os.environ['SLURM_PROCID'])) 
+xprint = functools.partial(modified_print, local_rank=int(os.environ['SLURM_PROCID'])) 
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,7 @@ def train(args, train_dataset, model, tokenizer):
         args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
     else:
         t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+        args.warmup_steps = int(t_total * 0.1)
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
@@ -398,7 +401,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         start_n_top = model.config.start_n_top if hasattr(model, "config") else model.module.config.start_n_top
         end_n_top = model.config.end_n_top if hasattr(model, "config") else model.module.config.end_n_top
 
-        predictions = compute_predictions_log_probs(
+        predictions, no_answer_probs = compute_predictions_log_probs(
             examples,
             features,
             all_results,
@@ -414,7 +417,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             args.verbose_logging,
         )
     else:
-        predictions = compute_predictions_logits(
+        predictions, no_answer_probs = compute_predictions_logits(
             examples,
             features,
             all_results,
@@ -431,7 +434,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         )
 
     # Compute the F1 and exact scores.
-    results = squad_evaluate(examples, predictions)
+    results = squad_evaluate(examples, predictions, no_answer_probs=no_answer_probs)
     return results
 
 
@@ -694,6 +697,9 @@ def main():
 
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
     args = parser.parse_args()
+
+    job_id = int(os.environ['SLURM_JOBID'])
+    xprint(f'slurm job id {job_id}')
 
     if args.doc_stride >= args.max_seq_length - args.max_query_length:
         logger.warning(
