@@ -121,9 +121,11 @@ def train(args, train_dataset, model, tokenizer):
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
+    #no_grad = ['albert', 'qa_outputs']
+    no_grad = []
     optimizer_grouped_parameters = [
         {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay + no_grad)],
             "weight_decay": args.weight_decay,
         },
         {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
@@ -183,7 +185,7 @@ def train(args, train_dataset, model, tokenizer):
             checkpoint_suffix = args.model_name_or_path.split("-")[-1].split("/")[0]
             global_step = int(checkpoint_suffix)
             epochs_trained = global_step // (len(train_dataloader) // args.gradient_accumulation_steps)
-            steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
+            #steps_trained_in_current_epoch = global_step % (len(train_dataloader) // args.gradient_accumulation_steps)
 
             logger.info("  Continuing training from checkpoint, will skip to saved global_step")
             logger.info("  Continuing training from epoch %d", epochs_trained)
@@ -194,6 +196,8 @@ def train(args, train_dataset, model, tokenizer):
 
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
+    #model.albert.requires_grad_(False)
+    #model.qa_outputs.requires_grad_(False)
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0]
     )
@@ -210,6 +214,8 @@ def train(args, train_dataset, model, tokenizer):
                 continue
 
             model.train()
+            #model.qa_outputs.eval()
+            #model.albert.eval()
             batch = tuple(t.to(args.device) for t in batch)
 
             inputs = {
@@ -223,7 +229,7 @@ def train(args, train_dataset, model, tokenizer):
             if args.model_type in ["xlm", "roberta", "distilbert"]:
                 del inputs["token_type_ids"]
 
-            if args.model_type in ["xlnet", "xlm"]:
+            if args.model_type in ["xlnet", "xlm", "albert"]:
                 inputs.update({"cls_index": batch[5], "p_mask": batch[6]})
                 if args.version_2_with_negative:
                     inputs.update({"is_impossible": batch[7]})
@@ -344,7 +350,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             example_indices = batch[3]
 
             # XLNet and XLM use more arguments for their predictions
-            if args.model_type in ["xlnet", "xlm"]:
+            if args.model_type in ["xlnet", "xlm", "albert"]:
                 inputs.update({"cls_index": batch[4], "p_mask": batch[5]})
                 # for lang_id-sensitive xlm models
                 if hasattr(model, "config") and hasattr(model.config, "lang2id"):
@@ -379,8 +385,8 @@ def evaluate(args, model, tokenizer, prefix=""):
                 )
 
             else:
-                start_logits, end_logits = output
-                result = SquadResult(unique_id, start_logits, end_logits)
+                start_logits, end_logits, cls_logits = output
+                result = SquadResult(unique_id, start_logits, end_logits, cls_logits=cls_logits)
 
             all_results.append(result)
 

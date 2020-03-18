@@ -21,11 +21,13 @@ import os
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import functional as F
 
 from transformers.configuration_albert import AlbertConfig
 from transformers.modeling_bert import ACT2FN, BertEmbeddings, BertSelfAttention, prune_linear_layer
 from transformers.modeling_utils import PreTrainedModel
 
+from .modeling_utils import PoolerAnswerClass, PoolerEndLogits, PoolerStartLogits, SequenceSummary
 from .file_utils import add_start_docstrings, add_start_docstrings_to_callable
 
 
@@ -800,6 +802,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
 
         self.albert = AlbertModel(config)
         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+        self.answer_class = PoolerAnswerClass(config)
 
         self.init_weights()
 
@@ -814,6 +817,9 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         inputs_embeds=None,
         start_positions=None,
         end_positions=None,
+        is_impossible=None,
+        cls_index=None,
+        p_mask=None,
     ):
         r"""
         start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`, defaults to :obj:`None`):
@@ -877,7 +883,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
 
-        outputs = (start_logits, end_logits,) + outputs[2:]
+        outputs = (start_logits, end_logits)
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
@@ -893,6 +899,29 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
             start_loss = loss_fct(start_logits, start_positions)
             end_loss = loss_fct(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
+            if cls_index is not None and is_impossible is not None:
+                # Predict answerability from the representation of CLS and START
+                cls_logits = self.answer_class(sequence_output, start_positions=start_positions, cls_index=cls_index)
+                loss_fct_cls = nn.BCEWithLogitsLoss()
+                cls_loss = loss_fct_cls(cls_logits, is_impossible)
+
+                # note(zhiliny): by default multiply the loss by 0.5 so that the scale is comparable to start_loss and end_loss
+                total_loss += cls_loss * 0.5
+
             outputs = (total_loss,) + outputs
+        else:
+            # during inference, compute the end logits based on beam search
+            bsz, slen, hsz = sequence_output.size()
+            start_log_probs = F.softmax(start_logits, dim=-1)  # shape (bsz, slen)
+
+            start_states = torch.einsum(
+                "blh,bl->bh", sequence_output, start_log_probs
+            )  # get the representation of START as weighted sum of hidden states
+            cls_logits = self.answer_class(
+                sequence_output, start_states=start_states, cls_index=cls_index
+            )  # Shape (batch size,): one single `cls_logits` for each sample
+
+            outputs = outputs + (cls_logits,)
+
 
         return outputs  # (loss), start_logits, end_logits, (hidden_states), (attentions)
