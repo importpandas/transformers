@@ -396,6 +396,10 @@ def evaluate(args, model, tokenizer, prefix=""):
     # Compute predictions
     output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(prefix))
     output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(prefix))
+    output_start_logits_file = os.path.join(args.output_dir, "start_logits_{}.json".format(prefix))
+    output_end_logits_file = os.path.join(args.output_dir, "end_logits_{}.json".format(prefix))
+    output_best_non_null_score_file = os.path.join(args.output_dir, "non_null_score_{}.json".format(prefix))
+    output_cls_logits_file = os.path.join(args.output_dir, "cls_logits_{}.json".format(prefix))
 
     if args.version_2_with_negative:
         output_null_log_odds_file = os.path.join(args.output_dir, "null_odds_{}.json".format(prefix))
@@ -433,6 +437,10 @@ def evaluate(args, model, tokenizer, prefix=""):
             output_prediction_file,
             output_nbest_file,
             output_null_log_odds_file,
+            output_start_logits_file,
+            output_end_logits_file,
+            output_best_non_null_score_file,
+            output_cls_logits_file,
             args.verbose_logging,
             args.version_2_with_negative,
             args.null_score_diff_threshold,

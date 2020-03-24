@@ -1210,9 +1210,9 @@ class PoolerAnswerClass(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.dense_0 = nn.Linear(config.hidden_size * 2, config.hidden_size)
+        self.dense_0 = nn.Linear(config.hidden_size * 2, config.hidden_size // 4)
         self.activation = nn.Tanh()
-        self.dense_1 = nn.Linear(config.hidden_size, 1, bias=False)
+        self.dense_1 = nn.Linear(config.hidden_size // 4, 1, bias=False)
 
     def forward(self, hidden_states, start_states=None, start_positions=None, cls_index=None):
         """
