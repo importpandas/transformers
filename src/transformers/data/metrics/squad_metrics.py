@@ -384,6 +384,10 @@ def compute_predictions_logits(
     output_prediction_file,
     output_nbest_file,
     output_null_log_odds_file,
+    output_start_logits_file,
+    output_end_logits_file,
+    output_best_non_null_score_file,
+    output_cls_logits_file,
     verbose_logging,
     version_2_with_negative,
     null_score_diff_threshold,
@@ -408,6 +412,10 @@ def compute_predictions_logits(
     all_predictions = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
     scores_diff_json = collections.OrderedDict()
+    start_logits_json = collections.OrderedDict()
+    end_logits_json = collections.OrderedDict()
+    non_null_score_json = collections.OrderedDict()
+    cls_logits_json = collections.OrderedDict()
 
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
@@ -555,6 +563,11 @@ def compute_predictions_logits(
             score_diff = score_null - best_non_null_entry.start_logit - (best_non_null_entry.end_logit)
             scores_diff_json[example.qas_id] = score_diff
             all_predictions[example.qas_id] = best_non_null_entry.text
+            start_logits_json[example.qas_id] = best_non_null_entry.start_logit
+            end_logits_json[example.qas_id] = best_non_null_entry.end_logit
+            non_null_score_json[example.qas_id] = best_non_null_entry.start_logit + best_non_null_entry.end_logit
+            cls_logits_json[example.qas_id] = score_null
+
         all_nbest_json[example.qas_id] = nbest_json
 
     with open(output_prediction_file, "w") as writer:
@@ -562,6 +575,15 @@ def compute_predictions_logits(
 
     with open(output_nbest_file, "w") as writer:
         writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
+
+    with open(output_cls_logits_file, "w") as writer:
+        writer.write(json.dumps(cls_logits_json, indent=4) + "\n")
+    with open(output_best_non_null_score_file, "w") as writer:
+        writer.write(json.dumps(non_null_score_json, indent=4) + "\n")
+    with open(output_start_logits_file, "w") as writer:
+        writer.write(json.dumps(start_logits_json, indent=4) + "\n")
+    with open(output_end_logits_file, "w") as writer:
+        writer.write(json.dumps(end_logits_json, indent=4) + "\n")
 
     if version_2_with_negative:
         with open(output_null_log_odds_file, "w") as writer:
