@@ -14,6 +14,7 @@ import logging
 import math
 import re
 import string
+import os
 
 from transformers.tokenization_bert import BasicTokenizer
 
@@ -378,6 +379,7 @@ def compute_predictions_logits(
     all_examples,
     all_features,
     all_results,
+    output_dir,
     n_best_size,
     max_answer_length,
     do_lower_case,
@@ -408,6 +410,7 @@ def compute_predictions_logits(
     all_predictions = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
     scores_diff_json = collections.OrderedDict()
+    all_answer_index = collections.OrderedDict()
 
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
@@ -477,6 +480,7 @@ def compute_predictions_logits(
 
         seen_predictions = {}
         nbest = []
+        has_record_idx = False
         for pred in prelim_predictions:
             if len(nbest) >= n_best_size:
                 break
@@ -503,6 +507,10 @@ def compute_predictions_logits(
                 final_text = get_final_text(tok_text, orig_text, do_lower_case, verbose_logging)
                 if final_text in seen_predictions:
                     continue
+
+                if not has_record_idx:
+                    all_answer_index[example.qas_id] = (orig_doc_start, orig_doc_end)
+                    has_record_idx = True
 
                 seen_predictions[final_text] = True
             else:
@@ -562,6 +570,10 @@ def compute_predictions_logits(
 
     with open(output_nbest_file, "w") as writer:
         writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
+
+    output_ans_index_file = os.path.join(output_dir, "answer_index.json")
+    with open(output_ans_index_file, "w") as writer:
+        writer.write(json.dumps(all_answer_index, indent=4) + "\n")
 
     if version_2_with_negative:
         with open(output_null_log_odds_file, "w") as writer:

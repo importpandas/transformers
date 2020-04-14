@@ -23,6 +23,7 @@ import os
 import random
 import timeit
 import functools
+import h5py
 
 import numpy as np
 import torch
@@ -381,6 +382,9 @@ def evaluate(args, model, tokenizer, prefix=""):
             else:
                 start_logits, end_logits = output
                 result = SquadResult(unique_id, start_logits, end_logits)
+                # with h5py.File(os.path.join(args.output_dir, "last_hiddens.hdf5"),"a") as f:
+                #     f[str(unique_id+100)] = last_hidden
+
 
             all_results.append(result)
 
@@ -421,6 +425,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             examples,
             features,
             all_results,
+            args.output_dir,
             args.n_best_size,
             args.max_answer_length,
             args.do_lower_case,
