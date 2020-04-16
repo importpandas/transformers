@@ -23,6 +23,9 @@ import os
 import random
 import timeit
 import functools
+import json
+import collections
+from statistics import mean
 
 import numpy as np
 import torch
@@ -38,6 +41,7 @@ from transformers import (
     AlbertConfig,
     AlbertForQuestionAnswering,
     AlbertTokenizer,
+    AlbertVerifier,
     BertConfig,
     BertForQuestionAnswering,
     BertTokenizer,
@@ -216,8 +220,7 @@ def train(args, train_dataset, model, tokenizer):
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
                 "token_type_ids": batch[2],
-                "start_positions": batch[3],
-                "end_positions": batch[4],
+                "is_impossible": batch[7],
             }
 
             if args.model_type in ["xlm", "roberta", "distilbert"]:
@@ -324,7 +327,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     logger.info("  Num examples = %d", len(dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
 
-    all_results = []
+    null_score = {}
     start_time = timeit.default_timer()
 
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
@@ -379,63 +382,31 @@ def evaluate(args, model, tokenizer, prefix=""):
                 )
 
             else:
-                start_logits, end_logits = output
-                result = SquadResult(unique_id, start_logits, end_logits)
+                cls_logit = output
 
-            all_results.append(result)
+            null_score[unique_id] = cls_logit
 
+    null_score_with_qid = {}
     evalTime = timeit.default_timer() - start_time
     logger.info("  Evaluation done in total %f secs (%f sec per example)", evalTime, evalTime / len(dataset))
 
-    # Compute predictions
-    output_prediction_file = os.path.join(args.output_dir, "predictions_{}.json".format(prefix))
-    output_nbest_file = os.path.join(args.output_dir, "nbest_predictions_{}.json".format(prefix))
 
-    if args.version_2_with_negative:
-        output_null_log_odds_file = os.path.join(args.output_dir, "null_odds_{}.json".format(prefix))
-    else:
-        output_null_log_odds_file = None
+    example_index_to_features = collections.defaultdict(list)
+    for feature in features:
+        example_index_to_features[feature.example_index].append(feature)
 
-    # XLNet and XLM use a more complex post-processing procedure
-    if args.model_type in ["xlnet", "xlm"]:
-        start_n_top = model.config.start_n_top if hasattr(model, "config") else model.module.config.start_n_top
-        end_n_top = model.config.end_n_top if hasattr(model, "config") else model.module.config.end_n_top
+    for (example_index, example) in enumerate(examples):
+        null_score_with_qid[example.qas_id] = mean([null_score[feature.unique_id] for feature in example_index_to_features[example_index]])
 
-        predictions, no_answer_probs = compute_predictions_log_probs(
-            examples,
-            features,
-            all_results,
-            args.n_best_size,
-            args.max_answer_length,
-            output_prediction_file,
-            output_nbest_file,
-            output_null_log_odds_file,
-            start_n_top,
-            end_n_top,
-            args.version_2_with_negative,
-            tokenizer,
-            args.verbose_logging,
-        )
-    else:
-        predictions, no_answer_probs = compute_predictions_logits(
-            examples,
-            features,
-            all_results,
-            args.n_best_size,
-            args.max_answer_length,
-            args.do_lower_case,
-            output_prediction_file,
-            output_nbest_file,
-            output_null_log_odds_file,
-            args.verbose_logging,
-            args.version_2_with_negative,
-            args.null_score_diff_threshold,
-            tokenizer,
-        )
+
+
+    output_cls_logits_file = os.path.join(args.output_dir, "verifier_null_score_{}.json".format(prefix))
+    with open(output_cls_logits_file, "w") as writer:
+        writer.write(json.dumps(null_score_with_qid, indent=4) + "\n")
+
 
     # Compute the F1 and exact scores.
-    results = squad_evaluate(examples, predictions, no_answer_probs=no_answer_probs)
-    return results
+    return None
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
@@ -481,11 +452,17 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
             processor = SquadV2Processor() if args.version_2_with_negative else SquadV1Processor()
             if evaluate:
                 examples = processor.get_dev_examples(args.data_dir, filename=args.predict_file)
+                with open(args.devset_ans_idx_file, "r") as f:
+                    ans_idx_dict = json.load(f)
             else:
                 examples = processor.get_train_examples(args.data_dir, filename=args.train_file)
+                with open(args.trainset_ans_idx_file, "r") as f:
+                    ans_idx_dict = json.load(f)
+
 
         features, dataset = squad_convert_examples_to_features(
             examples=examples,
+            ans_idx_dict=ans_idx_dict,
             tokenizer=tokenizer,
             max_seq_length=args.max_seq_length,
             doc_stride=args.doc_stride,
@@ -555,6 +532,18 @@ def main():
         type=str,
         help="The input evaluation file. If a data dir is specified, will look for the file there"
         + "If no data dir or train/predict files are specified, will run with tensorflow_datasets.",
+    )
+    parser.add_argument(
+        "--trainset_ans_idx_file",
+        default=None,
+        type=str,
+        help="The file containing trainset answer index in all_doc_tokens",
+    )
+    parser.add_argument(
+        "--devset_ans_idx_file",
+        default=None,
+        type=str,
+        help="The file containing devset answer index in all_doc_tokens",
     )
     parser.add_argument(
         "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name"
@@ -789,7 +778,7 @@ def main():
         do_lower_case=args.do_lower_case,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
-    model = model_class.from_pretrained(
+    model = AlbertVerifier.from_pretrained(
         args.model_name_or_path,
         from_tf=bool(".ckpt" in args.model_name_or_path),
         config=config,

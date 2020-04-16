@@ -83,7 +83,7 @@ def _is_whitespace(c):
     return False
 
 
-def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_query_length, is_training):
+def squad_convert_example_to_features(example, ans_idx_dict, max_seq_length, doc_stride, max_query_length, is_training):
     features = []
     if is_training and not example.is_impossible:
         # Get start and end position
@@ -97,9 +97,31 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
             logger.warning("Could not find answer: '%s' vs. '%s'", actual_text, cleaned_answer_text)
             return []
 
+    (predicted_ans_start, predicted_ans_end) = ans_idx_dict[example.qas_id]
+
+    ans_sentence_start = predicted_ans_start
+    ans_sentence_end = predicted_ans_end
+    while ans_sentence_start > 0:
+        if "." in example.doc_tokens[ans_sentence_start - 1]:
+            break
+        else:
+            ans_sentence_start -= 1
+    while ans_sentence_end < len(example.doc_tokens):
+        if "." in example.doc_tokens[ans_sentence_end]:
+            break
+        else:
+            ans_sentence_end += 1
+
+    example.question_text = example.question_text + " " +  \
+                            " ".join(example.doc_tokens[predicted_ans_start: predicted_ans_end + 1])
+    example.doc_tokens = example.doc_tokens[ans_sentence_start: ans_sentence_end + 1]
+
+
     tok_to_orig_index = []
     orig_to_tok_index = []
     all_doc_tokens = []
+
+
     for (i, token) in enumerate(example.doc_tokens):
         orig_to_tok_index.append(len(all_doc_tokens))
         sub_tokens = tokenizer.tokenize(token)
@@ -107,16 +129,17 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
             tok_to_orig_index.append(i)
             all_doc_tokens.append(sub_token)
 
-    if is_training and not example.is_impossible:
-        tok_start_position = orig_to_tok_index[example.start_position]
-        if example.end_position < len(example.doc_tokens) - 1:
-            tok_end_position = orig_to_tok_index[example.end_position + 1] - 1
-        else:
-            tok_end_position = len(all_doc_tokens) - 1
 
-        (tok_start_position, tok_end_position) = _improve_answer_span(
-            all_doc_tokens, tok_start_position, tok_end_position, tokenizer, example.answer_text
-        )
+    # if is_training and not example.is_impossible:
+    #     tok_start_position = orig_to_tok_index[example.start_position]
+    #     if example.end_position < len(example.doc_tokens) - 1:
+    #         tok_end_position = orig_to_tok_index[example.end_position + 1] - 1
+    #     else:
+    #         tok_end_position = len(all_doc_tokens) - 1
+    #
+    #     (tok_start_position, tok_end_position) = _improve_answer_span(
+    #         all_doc_tokens, tok_start_position, tok_end_position, tokenizer, example.answer_text
+    #     )
 
     spans = []
 
@@ -172,15 +195,15 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
             break
         span_doc_tokens = encoded_dict["overflowing_tokens"]
 
-    for doc_span_index in range(len(spans)):
-        for j in range(spans[doc_span_index]["paragraph_len"]):
-            is_max_context = _new_check_is_max_context(spans, doc_span_index, doc_span_index * doc_stride + j)
-            index = (
-                j
-                if tokenizer.padding_side == "left"
-                else spans[doc_span_index]["truncated_query_with_special_tokens_length"] + j
-            )
-            spans[doc_span_index]["token_is_max_context"][index] = is_max_context
+    # for doc_span_index in range(len(spans)):
+    #     for j in range(spans[doc_span_index]["paragraph_len"]):
+    #         is_max_context = _new_check_is_max_context(spans, doc_span_index, doc_span_index * doc_stride + j)
+    #         index = (
+    #             j
+    #             if tokenizer.padding_side == "left"
+    #             else spans[doc_span_index]["truncated_query_with_special_tokens_length"] + j
+    #         )
+    #         spans[doc_span_index]["token_is_max_context"][index] = is_max_context
 
     for span in spans:
         # Identify the position of the CLS token
@@ -204,28 +227,28 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
         span_is_impossible = example.is_impossible
         start_position = 0
         end_position = 0
-        if is_training and not span_is_impossible:
-            # For training, if our document chunk does not contain an annotation
-            # we throw it out, since there is nothing to predict.
-            doc_start = span["start"]
-            doc_end = span["start"] + span["length"] - 1
-            out_of_span = False
-
-            if not (tok_start_position >= doc_start and tok_end_position <= doc_end):
-                out_of_span = True
-
-            if out_of_span:
-                start_position = cls_index
-                end_position = cls_index
-                span_is_impossible = True
-            else:
-                if tokenizer.padding_side == "left":
-                    doc_offset = 0
-                else:
-                    doc_offset = len(truncated_query) + sequence_added_tokens
-
-                start_position = tok_start_position - doc_start + doc_offset
-                end_position = tok_end_position - doc_start + doc_offset
+        # if is_training and not span_is_impossible:
+        #     # For training, if our document chunk does not contain an annotation
+        #     # we throw it out, since there is nothing to predict.
+        #     doc_start = span["start"]
+        #     doc_end = span["start"] + span["length"] - 1
+        #     out_of_span = False
+        #
+        #     if not (tok_start_position >= doc_start and tok_end_position <= doc_end):
+        #         out_of_span = True
+        #
+        #     if out_of_span:
+        #         start_position = cls_index
+        #         end_position = cls_index
+        #         span_is_impossible = True
+        #     else:
+        #         if tokenizer.padding_side == "left":
+        #             doc_offset = 0
+        #         else:
+        #             doc_offset = len(truncated_query) + sequence_added_tokens
+        #
+        #         start_position = tok_start_position - doc_start + doc_offset
+        #         end_position = tok_end_position - doc_start + doc_offset
 
         features.append(
             SquadFeatures(
@@ -254,7 +277,7 @@ def squad_convert_example_to_features_init(tokenizer_for_convert):
 
 
 def squad_convert_examples_to_features(
-    examples, tokenizer, max_seq_length, doc_stride, max_query_length, is_training, return_dataset=False, threads=1
+    examples, ans_idx_dict, tokenizer, max_seq_length, doc_stride, max_query_length, is_training, return_dataset=False, threads=1
 ):
     """
     Converts a list of examples into a list of features that can be directly given as input to a model.
@@ -297,6 +320,7 @@ def squad_convert_examples_to_features(
     with Pool(threads, initializer=squad_convert_example_to_features_init, initargs=(tokenizer,)) as p:
         annotate_ = partial(
             squad_convert_example_to_features,
+            ans_idx_dict=ans_idx_dict,
             max_seq_length=max_seq_length,
             doc_stride=doc_stride,
             max_query_length=max_query_length,
