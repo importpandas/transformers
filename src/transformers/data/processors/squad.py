@@ -362,7 +362,7 @@ def squad_convert_examples_to_features(
         if not is_training:
             all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
             dataset = TensorDataset(
-                all_input_ids, all_attention_masks, all_token_type_ids, all_example_index, all_cls_index, all_p_mask
+                all_input_ids, all_attention_masks, all_token_type_ids, all_example_index, all_cls_index, all_p_mask, all_is_impossible
             )
         else:
             all_start_positions = torch.tensor([f.start_position for f in features], dtype=torch.long)

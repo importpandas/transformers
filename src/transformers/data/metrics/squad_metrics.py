@@ -244,6 +244,42 @@ def squad_evaluate(examples, preds, no_answer_probs=None, no_answer_probability_
 
     return evaluation
 
+def find_best_cls_thresh(na_probs, qid_to_has_ans):
+  num_no_ans = sum(1 for k in qid_to_has_ans if not qid_to_has_ans[k])
+  cur_score = num_no_ans
+  best_score = cur_score
+  best_thresh = 0.0
+  qid_list = sorted(na_probs, key=lambda k: na_probs[k])
+  for i, qid in enumerate(qid_list):
+    if qid_to_has_ans[qid]:
+        diff = 1
+    else:
+        diff = -1
+    cur_score += diff
+    if cur_score > best_score:
+        best_score = cur_score
+        best_thresh = na_probs[qid]
+  return 100.0 * best_score / len(na_probs), best_thresh
+
+def squad_evaluate_acc(examples, no_anser_probs):
+    qas_id_to_has_answer = {example.qas_id: bool(example.answers) for example in examples}
+    has_answer_qids = [qas_id for qas_id, has_answer in qas_id_to_has_answer.items() if has_answer]
+    no_answer_qids = [qas_id for qas_id, has_answer in qas_id_to_has_answer.items() if not has_answer]
+    best_acc, acc_thresh = find_best_cls_thresh(no_anser_probs, qas_id_to_has_answer)
+
+    hasAns_predictHas_num_acc = len([1 for k in has_answer_qids if no_anser_probs[k] < acc_thresh])
+    noAns_predictNo_num_acc = len([1 for k in no_answer_qids if no_anser_probs[k] >= acc_thresh])
+
+    hasAns_answerability_acc_with_acc_thresh =  hasAns_predictHas_num_acc / len(has_answer_qids) * 100
+    noAns_answerability_acc_with_acc_thresh =  noAns_predictNo_num_acc / len(no_answer_qids) * 100
+
+    main_eval = collections.OrderedDict()
+    main_eval["acc_thresh"] = acc_thresh
+    main_eval["best_acc"] = best_acc
+    main_eval["hasAns_answerability_acc_with_acc_thresh"] = hasAns_answerability_acc_with_acc_thresh
+    main_eval["noAns_answerability_acc_with_acc_thresh"] = noAns_answerability_acc_with_acc_thresh
+    return main_eval
+
 
 def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     """Project the tokenized prediction back to the original text."""

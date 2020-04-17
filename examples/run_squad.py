@@ -64,6 +64,7 @@ from transformers.data.metrics.squad_metrics import (
     compute_predictions_log_probs,
     compute_predictions_logits,
     squad_evaluate,
+    squad_evaluate_acc,
 )
 from transformers.data.processors.squad import SquadResult, SquadV1Processor, SquadV2Processor
 
@@ -339,6 +340,7 @@ def evaluate(args, model, tokenizer, prefix=""):
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
                 "token_type_ids": batch[2],
+                "is_impossible": batch[6],
             }
 
             if args.model_type in ["xlm", "roberta", "distilbert"]:
@@ -361,28 +363,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             eval_feature = features[example_index.item()]
             unique_id = int(eval_feature.unique_id)
 
-            output = [to_list(output[i]) for output in outputs]
-
-            # Some models (XLNet, XLM) use 5 arguments for their predictions, while the other "simpler"
-            # models only use two.
-            if len(output) >= 5:
-                start_logits = output[0]
-                start_top_index = output[1]
-                end_logits = output[2]
-                end_top_index = output[3]
-                cls_logits = output[4]
-
-                result = SquadResult(
-                    unique_id,
-                    start_logits,
-                    end_logits,
-                    start_top_index=start_top_index,
-                    end_top_index=end_top_index,
-                    cls_logits=cls_logits,
-                )
-
-            else:
-                cls_logit = output
+            cls_logit = to_list(outputs[1][i])[0]
 
             null_score[unique_id] = cls_logit
 
@@ -404,9 +385,10 @@ def evaluate(args, model, tokenizer, prefix=""):
     with open(output_cls_logits_file, "w") as writer:
         writer.write(json.dumps(null_score_with_qid, indent=4) + "\n")
 
+    results = squad_evaluate_acc(examples, null_score_with_qid)
 
     # Compute the F1 and exact scores.
-    return None
+    return results
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=False):
@@ -849,7 +831,7 @@ def main():
         for checkpoint in checkpoints:
             # Reload the model
             global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
-            model = model_class.from_pretrained(checkpoint)  # , force_download=True)
+            model = AlbertVerifier.from_pretrained(checkpoint)  # , force_download=True)
             model.to(args.device)
 
             # Evaluate
