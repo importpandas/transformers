@@ -101,14 +101,24 @@ def squad_convert_example_to_features(example, ans_idx_dict, max_seq_length, doc
 
     ans_sentence_start = predicted_ans_start
     ans_sentence_end = predicted_ans_end
+    find_period_num = 0
     while ans_sentence_start > 0:
         if "." in example.doc_tokens[ans_sentence_start - 1]:
-            break
+            if find_period_num == 1:
+                break
+            elif find_period_num == 0:
+                find_period_num += 1
+                ans_sentence_start -= 1
         else:
             ans_sentence_start -= 1
-    while ans_sentence_end < len(example.doc_tokens):
+    find_period_num = 0
+    while ans_sentence_end < len(example.doc_tokens)-1:
         if "." in example.doc_tokens[ans_sentence_end]:
-            break
+            if find_period_num == 1:
+                break
+            elif find_period_num == 0:
+                find_period_num += 1
+                ans_sentence_end += 1
         else:
             ans_sentence_end += 1
 
