@@ -218,6 +218,9 @@ def train(args, train_dataset, model, tokenizer):
                 "token_type_ids": batch[2],
                 "start_positions": batch[3],
                 "end_positions": batch[4],
+                "p_mask": batch[6],
+                "query_lens": batch[8],
+                "paragraph_lens": batch[9],
             }
 
             if args.model_type in ["xlm", "roberta", "distilbert"]:
@@ -336,10 +339,11 @@ def evaluate(args, model, tokenizer, prefix=""):
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
                 "token_type_ids": batch[2],
+                "p_mask": batch[5],
+                "query_lens": batch[6],
+                "paragraph_lens": batch[7],
             }
 
-            if args.model_type in ["xlm", "roberta", "distilbert"]:
-                del inputs["token_type_ids"]
 
             example_indices = batch[3]
 
@@ -792,6 +796,10 @@ def main():
         args.config_name if args.config_name else args.model_name_or_path,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
+    config.num_cross_attention_heads = 8
+    config.output_cross_attentions = False
+    config.cross_attention_probs_dropout_prob = 0.1
+
     tokenizer = tokenizer_class.from_pretrained(
         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
         do_lower_case=args.do_lower_case,

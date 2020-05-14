@@ -443,26 +443,28 @@ def compute_predictions_logits(
                     # We could hypothetically create invalid predictions, e.g., predict
                     # that the start of the span is in the question. We throw out all
                     # invalid predictions.
-                    if start_index >= len(feature.tokens):
+                    orignal_start_index = start_index + feature.query_len + 1 if start_index != 0 else 0
+                    orignal_end_index = end_index + feature.query_len + 1 if end_index != 0 else 0
+                    if orignal_start_index >= len(feature.tokens):
                         continue
-                    if end_index >= len(feature.tokens):
+                    if orignal_end_index >= len(feature.tokens):
                         continue
-                    if start_index not in feature.token_to_orig_map:
+                    if orignal_start_index not in feature.token_to_orig_map:
                         continue
-                    if end_index not in feature.token_to_orig_map:
+                    if orignal_end_index not in feature.token_to_orig_map:
                         continue
-                    if not feature.token_is_max_context.get(start_index, False):
+                    if not feature.token_is_max_context.get(orignal_start_index, False):
                         continue
-                    if end_index < start_index:
+                    if orignal_end_index < orignal_start_index:
                         continue
-                    length = end_index - start_index + 1
+                    length = orignal_end_index - orignal_start_index + 1
                     if length > max_answer_length:
                         continue
                     prelim_predictions.append(
                         _PrelimPrediction(
                             feature_index=feature_index,
-                            start_index=start_index,
-                            end_index=end_index,
+                            start_index=orignal_start_index,
+                            end_index=orignal_end_index,
                             start_logit=result.start_logits[start_index],
                             end_logit=result.end_logits[end_index],
                         )

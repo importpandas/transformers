@@ -19,6 +19,7 @@ import math
 import os
 
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
@@ -799,6 +800,7 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         self.num_labels = config.num_labels
 
         self.albert = AlbertModel(config)
+        self.cross_attention = CrossAttention(config)
         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
 
         self.init_weights()
@@ -814,6 +816,9 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
         inputs_embeds=None,
         start_positions=None,
         end_positions=None,
+        p_mask=None,
+        query_lens=None,
+        paragraph_lens=None,
     ):
         r"""
         start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`, defaults to :obj:`None`):
@@ -872,7 +877,17 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
 
         sequence_output = outputs[0]
 
-        logits = self.qa_outputs(sequence_output)
+        question_vectors, paragraph_vectors, question_attention_mask = \
+        self.separate_question_passage(sequence_output, p_mask, query_lens, paragraph_lens)
+
+        cross_output = self.cross_attention(paragraph_vectors, encoder_hidden_states=question_vectors,
+                                  encoder_attention_mask=question_attention_mask)[0]
+
+        # import h5py
+        # with h5py.File('sequence_output.hdf5', 'w') as f:
+        #     f['sequence_output'] = sequence_output.detach()
+
+        logits = self.qa_outputs(cross_output)
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
@@ -896,3 +911,112 @@ class AlbertForQuestionAnswering(AlbertPreTrainedModel):
             outputs = (total_loss,) + outputs
 
         return outputs  # (loss), start_logits, end_logits, (hidden_states), (attentions)
+
+    def separate_question_passage(self, sequence_output, p_mask, question_lens, paragraph_lens):
+
+        p_mask_truncated = p_mask[:, :32]
+        max_question_len = int(max(question_lens).item() + 1)
+        max_paragraph_len = int(max(paragraph_lens).item() + 1)
+        batch_size = sequence_output.size()[0]
+        max_seq_len = sequence_output.size()[1]
+        sequence_output = sequence_output.view(-1, sequence_output.size()[-1])
+        sequence_output = torch.cat((sequence_output,
+                                     torch.zeros((1, sequence_output.size()[-1]), device=sequence_output.device)))
+        padding_index = sequence_output.size()[0] - 1
+        question_indexes = []
+        paragraph_indexes = []
+        for i in range(p_mask.size()[0]):
+            p_mask_i = p_mask[i]
+            p_mask_truncated_i = p_mask_truncated[i]
+            question_index = torch.where(p_mask_truncated_i == 1)[0] + i * 512
+            question_index_padded = F.pad(question_index, pad=(0, max_question_len - len(question_index)),
+                                          value=padding_index)
+            question_indexes.append(question_index_padded)
+            paragraph_index = torch.where(p_mask_i == 0)[0]
+            paragraph_index_padded = F.pad(paragraph_index, pad=(0, max_paragraph_len - len(paragraph_index)),
+                                           value=padding_index)
+            paragraph_indexes.append(paragraph_index_padded)
+        all_question_index = torch.stack(question_indexes)
+        all_paragraph_index = torch.stack(paragraph_indexes)
+        question_attention_mask = torch.where(all_question_index == padding_index, torch.tensor((0)), torch.tensor((1)))
+        question_vectors = torch.index_select(sequence_output, 0,
+                                              all_question_index.view(-1)).view(batch_size, max_question_len, -1)
+        paragraph_vectors = torch.index_select(sequence_output, 0,
+                                               all_paragraph_index.view(-1)).view(batch_size, max_paragraph_len, -1)
+        return (question_vectors, paragraph_vectors, question_attention_mask)
+
+
+class CrossAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        if config.hidden_size % config.num_cross_attention_heads != 0:
+            raise ValueError(
+                "The hidden size (%d) is not a multiple of the number of attention "
+                "heads (%d)" % (config.hidden_size, config.num_cross_attention_heads)
+            )
+        self.output_attentions = config.output_cross_attentions
+
+        self.num_attention_heads = config.num_cross_attention_heads
+        self.attention_head_size = int(config.hidden_size / config.num_cross_attention_heads)
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        self.query = nn.Linear(config.hidden_size, self.all_head_size)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size)
+
+        self.dropout = nn.Dropout(config.cross_attention_probs_dropout_prob)
+
+    def transpose_for_scores(self, x):
+        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        x = x.view(*new_x_shape)
+        return x.permute(0, 2, 1, 3)
+
+    def forward(
+            self,
+            hidden_states,
+            encoder_hidden_states,
+            encoder_attention_mask,
+            attention_mask=None,
+            head_mask=None,
+    ):
+        mixed_query_layer = self.query(hidden_states)
+
+        # If this is instantiated as a cross-attention module, the keys
+        # and values come from an encoder; the attention mask needs to be
+        # such that the encoder's padding tokens are not attended to.
+        mixed_key_layer = self.key(encoder_hidden_states)
+        mixed_value_layer = self.value(encoder_hidden_states)
+
+        extended_attention_mask = encoder_attention_mask.unsqueeze(1).unsqueeze(2)
+        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        attention_mask = extended_attention_mask
+
+        query_layer = self.transpose_for_scores(mixed_query_layer)
+        key_layer = self.transpose_for_scores(mixed_key_layer)
+        value_layer = self.transpose_for_scores(mixed_value_layer)
+
+        # Take the dot product between "query" and "key" to get the raw attention scores.
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_scores = attention_scores + attention_mask
+
+        # Normalize the attention scores to probabilities.
+        attention_probs = nn.Softmax(dim=-1)(attention_scores)
+
+        # This is actually dropping out entire tokens to attend to, which might
+        # seem a bit unusual, but is taken from the original Transformer paper.
+        attention_probs = self.dropout(attention_probs)
+
+        # Mask heads if we want to
+        if head_mask is not None:
+            attention_probs = attention_probs * head_mask
+
+        context_layer = torch.matmul(attention_probs, value_layer)
+
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        context_layer = context_layer.view(*new_context_layer_shape)
+
+        outputs = (context_layer, attention_probs) if self.output_attentions else (context_layer,)
+        return outputs

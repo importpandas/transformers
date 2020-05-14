@@ -224,8 +224,8 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
                 else:
                     doc_offset = len(truncated_query) + sequence_added_tokens
 
-                start_position = tok_start_position - doc_start + doc_offset
-                end_position = tok_end_position - doc_start + doc_offset
+                start_position = tok_start_position - doc_start + 1
+                end_position = tok_end_position - doc_start + 1
 
         features.append(
             SquadFeatures(
@@ -237,6 +237,7 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
                 example_index=0,  # Can not set unique_id and example_index here. They will be set after multiple processing.
                 unique_id=0,
                 paragraph_len=span["paragraph_len"],
+                query_len=len(truncated_query),
                 token_is_max_context=span["token_is_max_context"],
                 tokens=span["tokens"],
                 token_to_orig_map=span["token_to_orig_map"],
@@ -334,11 +335,14 @@ def squad_convert_examples_to_features(
         all_cls_index = torch.tensor([f.cls_index for f in features], dtype=torch.long)
         all_p_mask = torch.tensor([f.p_mask for f in features], dtype=torch.float)
         all_is_impossible = torch.tensor([f.is_impossible for f in features], dtype=torch.float)
+        all_query_lens = torch.tensor([f.query_len for f in features], dtype=torch.long)
+        all_paragraph_lens = torch.tensor([f.paragraph_len for f in features], dtype=torch.long)
 
         if not is_training:
             all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
             dataset = TensorDataset(
-                all_input_ids, all_attention_masks, all_token_type_ids, all_example_index, all_cls_index, all_p_mask
+                all_input_ids, all_attention_masks, all_token_type_ids, all_example_index, all_cls_index, all_p_mask,
+                all_query_lens, all_paragraph_lens
             )
         else:
             all_start_positions = torch.tensor([f.start_position for f in features], dtype=torch.long)
@@ -352,6 +356,8 @@ def squad_convert_examples_to_features(
                 all_cls_index,
                 all_p_mask,
                 all_is_impossible,
+                all_query_lens,
+                all_paragraph_lens
             )
 
         return features, dataset
@@ -664,6 +670,7 @@ class SquadFeatures(object):
         example_index,
         unique_id,
         paragraph_len,
+        query_len,
         token_is_max_context,
         tokens,
         token_to_orig_map,
@@ -680,6 +687,7 @@ class SquadFeatures(object):
         self.example_index = example_index
         self.unique_id = unique_id
         self.paragraph_len = paragraph_len
+        self.query_len = query_len
         self.token_is_max_context = token_is_max_context
         self.tokens = tokens
         self.token_to_orig_map = token_to_orig_map
